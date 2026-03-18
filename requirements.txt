@@ -1,0 +1,7 @@
+streamlit
+pandas
+jpholiday
+gspread
+oauth2client
+gspread-formatting
+
