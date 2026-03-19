@@ -411,7 +411,7 @@ if st.button("この内容でシフトを確定する", type="primary"):
 
                 shift_ws.update_cell(target_row, col, val)
                 fmt = gsf.CellFormat(backgroundColor=bg_color)
-                gsf.format_cell_range(shift_ws, gsf.rowcol_to_a1(target_row, col), fmt)
+                gsf.format_cell_range(shift_ws, gspread.utils.rowcol_to_a1(target_row, col), fmt)
 
             st.success(f"✅ {selected_staff}さんのシフトを更新しました！")
             st.balloons()
