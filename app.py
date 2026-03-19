@@ -235,7 +235,9 @@ st.markdown("""
 
 
 # --- 2. スプレッドシート接続設定 ---
-# SPREADSHEET_IDは月選択後に年ごとに動的にセットされます
+# スタッフ一覧は毎年共通の別ファイル（master）を使用
+# シフト用SPREADSHEET_IDは月選択後に年ごとに動的にセットされます
+MASTER_SPREADSHEET_ID = st.secrets["spreadsheet"]["master"]
 
 # セルの値 → segmented_control の選択肢 への変換マップ
 CELL_TO_STATUS = {
@@ -259,10 +261,10 @@ def get_gspread_client():
 
 
 @st.cache_data(ttl=60)
-def load_staff_master():
+def load_staff_master(spreadsheet_id: str):
     """スタッフ一覧シートから {店舗名: [スタッフ名, ...]} の辞書を返す"""
     client = get_gspread_client()
-    spreadsheet = client.open_by_key(SPREADSHEET_ID)
+    spreadsheet = client.open_by_key(spreadsheet_id)
     master_sheet = spreadsheet.worksheet("スタッフ一覧")
     data = master_sheet.get_all_records()
     staff_dict = {}
@@ -277,7 +279,7 @@ def load_staff_master():
 
 
 @st.cache_data(ttl=30)
-def load_existing_shift(staff_name: str, sheet_name: str, num_days: int) -> dict:
+def load_existing_shift(staff_name: str, sheet_name: str, num_days: int, spreadsheet_id: str) -> dict:
     """
     指定シートから staff_name の行を探し、
     {1: "出勤", 2: "希望休", ...} の形式で返す。
@@ -286,7 +288,7 @@ def load_existing_shift(staff_name: str, sheet_name: str, num_days: int) -> dict
     default = {day: "出勤" for day in range(1, num_days + 1)}
     try:
         client = get_gspread_client()
-        ss = client.open_by_key(SPREADSHEET_ID)
+        ss = client.open_by_key(spreadsheet_id)
 
         try:
             shift_ws = ss.worksheet(sheet_name)
@@ -329,19 +331,7 @@ def load_existing_shift(staff_name: str, sheet_name: str, num_days: int) -> dict
 # --- 3. 画面の作成 ---
 st.title("📅 シフト申請")
 
-try:
-    staff_data = load_staff_master()
-    stores = list(staff_data.keys())
-except Exception as e:
-    st.error(f"名簿読み込みエラー: {e}")
-    st.stop()
-
-st.subheader("👤 あなたの情報を選択してください")
-selected_store = st.selectbox("所属店舗", stores)
-selected_staff = st.selectbox("スタッフ名", staff_data[selected_store])
-
-st.write("---")
-
+# --- まず月を選択（年のIDを決めるために最初に行う）---
 today = datetime.date.today()
 
 # 選択肢：当月から3ヶ月先まで（年をまたいでもOK）
@@ -354,16 +344,27 @@ for i in range(4):
 
 month_labels = [f"{y}年{m}月" for y, m in month_options]
 
-# デフォルトは翌月
-default_index = 1
-
 st.subheader("📆 提出する月を選択してください")
-selected_label = st.selectbox("対象月", month_labels, index=default_index)
+selected_label = st.selectbox("対象月", month_labels, index=1)  # デフォルトは翌月
 selected_index = month_labels.index(selected_label)
 year, month = month_options[selected_index]
 
 # 選択した年に対応するスプレッドシートIDを自動で切り替え
 SPREADSHEET_ID = st.secrets["spreadsheet"][str(year)]
+
+st.write("---")
+
+# --- 年のIDが決まったのでスタッフ一覧を読み込む ---
+try:
+    staff_data = load_staff_master(MASTER_SPREADSHEET_ID)
+    stores = list(staff_data.keys())
+except Exception as e:
+    st.error(f"名簿読み込みエラー: {e}")
+    st.stop()
+
+st.subheader("👤 あなたの情報を選択してください")
+selected_store = st.selectbox("所属店舗", stores)
+selected_staff = st.selectbox("スタッフ名", staff_data[selected_store])
 
 num_days = calendar.monthrange(year, month)[1]
 
@@ -381,7 +382,7 @@ st.markdown("""
 
 # ★ 既存シフトをスプレッドシートから読み込む
 with st.spinner("前回のシフトを読み込み中..."):
-    existing_shift = load_existing_shift(selected_staff, shift_sheet_name, num_days)
+    existing_shift = load_existing_shift(selected_staff, shift_sheet_name, num_days, SPREADSHEET_ID)
 
 # 既存データがあれば通知メッセージを切り替える
 has_existing = any(v != "出勤" for v in existing_shift.values())
