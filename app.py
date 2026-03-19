@@ -235,7 +235,7 @@ st.markdown("""
 
 
 # --- 2. スプレッドシート接続設定 ---
-SPREADSHEET_ID = st.secrets["spreadsheet"]["id"]
+# SPREADSHEET_IDは月選択後に年ごとに動的にセットされます
 
 # セルの値 → segmented_control の選択肢 への変換マップ
 CELL_TO_STATUS = {
@@ -344,24 +344,26 @@ st.write("---")
 
 today = datetime.date.today()
 
-# 選択肢：当月から3ヶ月先まで、ただし年をまたぐ月は除外
+# 選択肢：当月から3ヶ月先まで（年をまたいでもOK）
 month_options = []
 for i in range(4):
     m = today.month + i
     y = today.year + (m - 1) // 12
     m = ((m - 1) % 12) + 1
-    if y == today.year:  # 今年の月のみ
-        month_options.append((y, m))
+    month_options.append((y, m))
 
 month_labels = [f"{y}年{m}月" for y, m in month_options]
 
-# デフォルトは翌月（翌月が今年内にあれば）、なければ当月
-default_index = 1 if len(month_options) > 1 else 0
+# デフォルトは翌月
+default_index = 1
 
 st.subheader("📆 提出する月を選択してください")
 selected_label = st.selectbox("対象月", month_labels, index=default_index)
 selected_index = month_labels.index(selected_label)
 year, month = month_options[selected_index]
+
+# 選択した年に対応するスプレッドシートIDを自動で切り替え
+SPREADSHEET_ID = st.secrets["spreadsheet"][str(year)]
 
 num_days = calendar.monthrange(year, month)[1]
 
