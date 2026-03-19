@@ -278,7 +278,6 @@ def load_staff_master(spreadsheet_id: str):
     return staff_dict
 
 
-@st.cache_data(ttl=30)
 def load_existing_shift(staff_name: str, sheet_name: str, num_days: int, spreadsheet_id: str) -> dict:
     """
     指定シートから staff_name の行を探し、
@@ -494,9 +493,6 @@ if st.button("この内容でシフトを確定する", type="primary"):
                 col = day + 1
                 val = STATUS_TO_CELL[status]
                 shift_ws.update_cell(target_row, col, val)
-
-            # キャッシュをクリアして次回表示時に最新データを反映
-            load_existing_shift.clear()
 
             st.success(f"✅ {selected_staff}さんの{month}月シフトを更新しました！")
             st.balloons()
