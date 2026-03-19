@@ -339,23 +339,24 @@ if st.button("この内容でシフトを確定する", type="primary"):
 
             shift_ws = ss.worksheet("シフト")
             
-            # 【大改造】スペースを完全に無視してA列から名前を探す機能
+            # ▼▼▼ 原因調査のための「レントゲン」コード ▼▼▼
+            a_col_values = shift_ws.col_values(1) # A列を取得
+            st.warning(f"🔍【調査】プログラムが取得したA列の全データ:\n {a_col_values}")
+            st.warning(f"🔍【調査】探している名前:\n {selected_staff}")
+            # ▲▲▲ ここまで ▲▲▲
+
             try:
-                a_col_values = shift_ws.col_values(1) # A列のデータをすべて取得
                 target_row = None
-                
-                # 検索する名前からスペースや改行を全削除
                 clean_target = str(selected_staff).replace(" ", "").replace("　", "").replace("\n", "").strip()
                 
                 for i, cell_val in enumerate(a_col_values):
-                    # スプレッドシート側の名前からもスペースや改行を全削除して比較
                     clean_cell = str(cell_val).replace(" ", "").replace("　", "").replace("\n", "").strip()
                     if clean_target == clean_cell:
-                        target_row = i + 1 # スプレッドシートは1行目から始まるため +1
+                        target_row = i + 1
                         break
                 
                 if target_row is None:
-                    raise AttributeError # 見つからなかったらエラー処理へ飛ばす
+                    raise AttributeError
 
                 # 見つかった行に対して1ヶ月分すべて上書き
                 for day in range(1, num_days + 1):
