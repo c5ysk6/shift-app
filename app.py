@@ -5,7 +5,7 @@ import jpholiday
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import gspread_formatting as gsf
-import unicodedata # ★文字正規化のために追加
+import unicodedata
 
 # --- 1. 【デザイン設定】白背景・視認性重視CSS ---
 st.set_page_config(page_title="シフト申請", layout="centered")
@@ -190,15 +190,15 @@ button[kind="primary"]:hover,
 </style>
 """, unsafe_allow_html=True)
 
-# --- ★【超強化】目に見えない幽霊文字も完全に消し去るクリーニング関数 ---
+
+# --- ★ 不可視文字も完全に除去するクリーニング関数 ---
 def aggressive_clean(text):
     if not text:
         return ""
-    # 文字列に変換して、Unicode正規化 (NFKC) で半角・全角を統一
     text = unicodedata.normalize('NFKC', str(text))
-    # 半角スペース、全角スペース、改行、そして「目に見えない特殊文字（\xa0など）」をすべて削除
     text = text.replace(" ", "").replace("　", "").replace("\n", "").replace("\r", "").replace("\xa0", "").strip()
     return text
+
 
 # --- JS：MutationObserver でインラインスタイルを直接書き込み（ダークモード完全対策） ---
 st.markdown("""
@@ -234,8 +234,14 @@ st.markdown("""
 </script>
 """, unsafe_allow_html=True)
 
+
 # --- 2. スプレッドシート接続設定 ---
-SHEET_NAME = "MEN売上目標原本"
+# ★【修正①】スプレッドシートIDで開く（同名ファイルが複数ある場合の誤開きを防止）
+# secrets.toml に以下を追加してください：
+#   [spreadsheet]
+#   id = "（スプレッドシートURLの /d/〇〇〇/ の部分）"
+SPREADSHEET_ID = st.secrets["spreadsheet"]["id"]
+
 
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -243,25 +249,25 @@ def get_gspread_client():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
 
+
 @st.cache_data(ttl=60)
 def load_staff_master():
     client = get_gspread_client()
-    spreadsheet = client.open(SHEET_NAME)
+    # ★【修正②】open_by_key でIDを使って開く
+    spreadsheet = client.open_by_key(SPREADSHEET_ID)
     master_sheet = spreadsheet.worksheet("スタッフ一覧")
     data = master_sheet.get_all_records()
     staff_dict = {}
     for row in data:
-        # 店舗名とスタッフ名を取得
-        store, staff = str(row["店舗名"]), str(row["スタッフ名"])
-        
-        # ★【強化】スタッフ一覧の名簿自体もクリーニングして登録
+        store = str(row["店舗名"])
+        staff = str(row["スタッフ名"])
         cleaned_staff = aggressive_clean(staff)
-        
-        # クリーニング後の名前をキーにして、元の名前（表示用）を保存
         if cleaned_staff:
-            if store not in staff_dict: staff_dict[store] = []
-            staff_dict[store].append(staff) # 画面表示用には元の名前をそのまま使う
+            if store not in staff_dict:
+                staff_dict[store] = []
+            staff_dict[store].append(staff)  # 表示用には元の名前を使う
     return staff_dict
+
 
 # --- 3. 画面の作成 ---
 st.title("📅 シフト申請")
@@ -280,12 +286,13 @@ selected_staff = st.selectbox("スタッフ名", staff_data[selected_store])
 st.write("---")
 
 today = datetime.date.today()
-if today.month == 12: year, month = today.year + 1, 1
-else: year, month = today.year, today.month + 1
+if today.month == 12:
+    year, month = today.year + 1, 1
+else:
+    year, month = today.year, today.month + 1
 
 st.subheader(f"📅 【{year}年{month}月分】のシフト")
 
-# --- 選択肢の説明 ---
 st.markdown("""
 <div style="background-color:#F0F4FF; border-radius:8px; padding:12px 16px; margin-bottom:8px; font-size:0.9em; color:#1A1A1A;">
 　🟡 <b>希望休</b>：休み希望（1日前後ずれても良い）<br>
@@ -297,7 +304,6 @@ st.info("💡 シフトを入力してください。")
 
 # --- 4. カレンダーデータ作成 ---
 num_days = calendar.monthrange(year, month)[1]
-
 selections = {}
 date_strings = {}
 
@@ -341,56 +347,57 @@ st.write("")
 memo = st.text_input("備考（任意）", placeholder="例：希望休の連休は翌週でも可能です")
 st.write("---")
 
+
 # --- 5. 【送信 ＆ 即時転記】 ---
 if st.button("この内容でシフトを確定する", type="primary"):
     with st.spinner('シフト表を更新中...（約10秒お待ちください）'):
         try:
             client = get_gspread_client()
-            ss = client.open(SHEET_NAME)
+            # ★【修正③】ここも open_by_key に統一
+            ss = client.open_by_key(SPREADSHEET_ID)
 
+            # 受信シートへの追記
             reception_ws = ss.worksheet("シフト申請受信")
             k_list = [date_strings[day] for day, status in selections.items() if status == "希望休"]
             c_list = [date_strings[day] for day, status in selections.items() if status == "確定休"]
-
             now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             reception_ws.append_row([now, selected_store, selected_staff, f"{year}年{month}月", "、".join(k_list), "、".join(c_list), memo])
 
+            # シフトシートへの転記
             shift_ws = ss.worksheet("シフト")
-            
-            # 【究極進化】部分一致＆監視カメラ付き検索
-            a_col_values = shift_ws.col_values(1) # A列のデータをすべて取得
+            a_col_values = shift_ws.col_values(1)
+
             target_row = None
-            
             clean_target = aggressive_clean(selected_staff)
-            debug_list = [] # 原因究明のためのメモ
-            
+            debug_list = []
+
             for i, cell_val in enumerate(a_col_values):
                 clean_cell = aggressive_clean(cell_val)
-                
-                # 空白の行は無視
                 if not clean_cell:
                     continue
-                    
-                # 調査用に読み取ったデータを記録
-                debug_list.append(f"{i+1}行目: {clean_cell}")
-                
-                # ★完全一致だけでなく「一部でも含まれていればOK（部分一致）」にする
+
+                # ★【修正④】repr() で不可視文字を可視化してデバッグリストに記録
+                debug_list.append(f"{i+1}行目: {clean_cell}  (生の値: {repr(cell_val)})")
+
                 if clean_target == clean_cell or clean_target in clean_cell or clean_cell in clean_target:
                     target_row = i + 1
                     break
-            
-            if target_row is None:
-                # 見つからなかった場合は、プログラムの「頭の中」を画面に全部出力する
-                st.error(f"⚠️ スプレッドシートの『シフト』シートに『{selected_staff}』さんが見つかりませんでした。")
-                st.info(f"🔍 探している名前: {clean_target}")
-                
-                if not debug_list:
-                     st.warning("🔍 プログラムがA列を読み取りましたが、**文字が1つも入っていませんでした！（空っぽです）**\n\nもしかして、名前が入っているのはB列だったり、A列とB列が『セルの結合』でくっついていたりしませんか？")
-                else:
-                     st.warning(f"🔍 プログラムが実際に読み取ったA列のデータ:\n\n" + " \n".join(debug_list))
-                st.stop() # ここで処理を中断
 
-            # 見つかった行に対して1ヶ月分すべて上書き
+            if target_row is None:
+                st.error(f"⚠️ スプレッドシートの『シフト』シートに『{selected_staff}』さんが見つかりませんでした。")
+                st.info(f"🔍 探している名前（クリーニング後）: {repr(clean_target)}")
+
+                if not debug_list:
+                    st.warning(
+                        "🔍 A列を読み取りましたが、文字が1つも入っていませんでした。\n\n"
+                        "名前が入っているのはB列だったり、A列とB列がセルの結合でくっついていたりしませんか？"
+                    )
+                else:
+                    st.warning("🔍 プログラムが読み取ったA列のデータ（生の値も含む）:\n\n" + "\n".join(debug_list))
+
+                st.stop()
+
+            # 見つかった行に1ヶ月分を書き込む
             for day in range(1, num_days + 1):
                 status = selections[day] or "出勤"
                 col = day + 1
