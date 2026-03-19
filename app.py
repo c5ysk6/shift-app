@@ -357,45 +357,57 @@ if st.button("この内容でシフトを確定する", type="primary"):
 
             shift_ws = ss.worksheet("シフト")
             
-            # 【強化】スペースや幽霊文字を完全に無視してA列から名前を探す機能
-            try:
-                a_col_values = shift_ws.col_values(1) # A列のデータをすべて取得
-                target_row = None
+            # 【究極進化】部分一致＆監視カメラ付き検索
+            a_col_values = shift_ws.col_values(1) # A列のデータをすべて取得
+            target_row = None
+            
+            clean_target = aggressive_clean(selected_staff)
+            debug_list = [] # 原因究明のためのメモ
+            
+            for i, cell_val in enumerate(a_col_values):
+                clean_cell = aggressive_clean(cell_val)
                 
-                # ★探している名前を「最強クリーニング」
-                clean_target = aggressive_clean(selected_staff)
+                # 空白の行は無視
+                if not clean_cell:
+                    continue
+                    
+                # 調査用に読み取ったデータを記録
+                debug_list.append(f"{i+1}行目: {clean_cell}")
                 
-                for i, cell_val in enumerate(a_col_values):
-                    # ★スプレッドシート側のA列の名前も「最強クリーニング」して比較
-                    clean_cell = aggressive_clean(cell_val)
-                    if clean_target == clean_cell:
-                        target_row = i + 1
-                        break
+                # ★完全一致だけでなく「一部でも含まれていればOK（部分一致）」にする
+                if clean_target == clean_cell or clean_target in clean_cell or clean_cell in clean_target:
+                    target_row = i + 1
+                    break
+            
+            if target_row is None:
+                # 見つからなかった場合は、プログラムの「頭の中」を画面に全部出力する
+                st.error(f"⚠️ スプレッドシートの『シフト』シートに『{selected_staff}』さんが見つかりませんでした。")
+                st.info(f"🔍 探している名前: {clean_target}")
                 
-                if target_row is None:
-                    raise AttributeError
+                if not debug_list:
+                     st.warning("🔍 プログラムがA列を読み取りましたが、**文字が1つも入っていませんでした！（空っぽです）**\n\nもしかして、名前が入っているのはB列だったり、A列とB列が『セルの結合』でくっついていたりしませんか？")
+                else:
+                     st.warning(f"🔍 プログラムが実際に読み取ったA列のデータ:\n\n" + " \n".join(debug_list))
+                st.stop() # ここで処理を中断
 
-                # 見つかった行に対して1ヶ月分すべて上書き
-                for day in range(1, num_days + 1):
-                    status = selections[day] or "出勤"
-                    col = day + 1
+            # 見つかった行に対して1ヶ月分すべて上書き
+            for day in range(1, num_days + 1):
+                status = selections[day] or "出勤"
+                col = day + 1
 
-                    if status == "希望休":
-                        val, bg_color = "", gsf.Color(1, 1, 0)
-                    elif status == "確定休":
-                        val, bg_color = "", gsf.Color(1, 0.6, 0.6)
-                    else:
-                        val, bg_color = "○", gsf.Color(1, 1, 1)
+                if status == "希望休":
+                    val, bg_color = "", gsf.Color(1, 1, 0)
+                elif status == "確定休":
+                    val, bg_color = "", gsf.Color(1, 0.6, 0.6)
+                else:
+                    val, bg_color = "○", gsf.Color(1, 1, 1)
 
-                    shift_ws.update_cell(target_row, col, val)
-                    fmt = gsf.CellFormat(backgroundColor=bg_color)
-                    gsf.format_cell_range(shift_ws, gsf.rowcol_to_a1(target_row, col), fmt)
+                shift_ws.update_cell(target_row, col, val)
+                fmt = gsf.CellFormat(backgroundColor=bg_color)
+                gsf.format_cell_range(shift_ws, gsf.rowcol_to_a1(target_row, col), fmt)
 
-                st.success(f"✅ {selected_staff}さんのシフトを更新しました！")
-                st.balloons()
-
-            except AttributeError:
-                st.error(f"⚠️ スプレッドシートの『シフト』シートのA列に『{selected_staff}』さんが見つかりませんでした。")
+            st.success(f"✅ {selected_staff}さんのシフトを更新しました！")
+            st.balloons()
 
         except Exception as e:
             st.error(f"システムエラー: {e}")
