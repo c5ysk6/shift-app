@@ -422,7 +422,7 @@ for day in range(1, num_days + 1):
             f"{day}日の状態",
             options=["出勤", "希望休", "確定休"],
             default=existing_shift[day],
-            key=f"btn_{day}",
+            key=f"btn_{selected_staff}_{month}_{day}",
             label_visibility="collapsed"
         )
 
