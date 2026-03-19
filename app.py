@@ -228,7 +228,6 @@ SHEET_NAME = "MEN売上目標原本"
 
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    # 鍵ファイルからではなく、Streamlitの「秘密の金庫」から読み込む
     creds_dict = dict(st.secrets["gcp_service_account"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
@@ -339,11 +338,26 @@ if st.button("この内容でシフトを確定する", type="primary"):
             reception_ws.append_row([now, selected_store, selected_staff, f"{year}年{month}月", "、".join(k_list), "、".join(c_list), memo])
 
             shift_ws = ss.worksheet("シフト")
-            name_to_find = selected_staff.strip()
-
+            
+            # 【大改造】スペースを完全に無視してA列から名前を探す機能
             try:
-                target_row = shift_ws.find(name_to_find, in_column=1).row
+                a_col_values = shift_ws.col_values(1) # A列のデータをすべて取得
+                target_row = None
+                
+                # 検索する名前からスペースや改行を全削除
+                clean_target = str(selected_staff).replace(" ", "").replace("　", "").replace("\n", "").strip()
+                
+                for i, cell_val in enumerate(a_col_values):
+                    # スプレッドシート側の名前からもスペースや改行を全削除して比較
+                    clean_cell = str(cell_val).replace(" ", "").replace("　", "").replace("\n", "").strip()
+                    if clean_target == clean_cell:
+                        target_row = i + 1 # スプレッドシートは1行目から始まるため +1
+                        break
+                
+                if target_row is None:
+                    raise AttributeError # 見つからなかったらエラー処理へ飛ばす
 
+                # 見つかった行に対して1ヶ月分すべて上書き
                 for day in range(1, num_days + 1):
                     status = selections[day] or "出勤"
                     col = day + 1
@@ -363,7 +377,7 @@ if st.button("この内容でシフトを確定する", type="primary"):
                 st.balloons()
 
             except AttributeError:
-                st.error(f"⚠️ スプレッドシートの『シフト』シートのA列に『{name_to_find}』さんが見つかりませんでした。フルネームを確認してください。")
+                st.error(f"⚠️ スプレッドシートの『シフト』シートのA列に『{selected_staff}』さんが見つかりませんでした。")
 
         except Exception as e:
             st.error(f"システムエラー: {e}")
