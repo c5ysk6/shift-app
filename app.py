@@ -4,7 +4,6 @@ import calendar
 import jpholiday
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import gspread_formatting as gsf
 import unicodedata
 
 # --- 1. 【デザイン設定】白背景・視認性重視CSS ---
@@ -236,11 +235,20 @@ st.markdown("""
 
 
 # --- 2. スプレッドシート接続設定 ---
-# ★【修正①】スプレッドシートIDで開く（同名ファイルが複数ある場合の誤開きを防止）
-# secrets.toml に以下を追加してください：
-#   [spreadsheet]
-#   id = "（スプレッドシートURLの /d/〇〇〇/ の部分）"
 SPREADSHEET_ID = st.secrets["spreadsheet"]["id"]
+
+# セルの値 → segmented_control の選択肢 への変換マップ
+CELL_TO_STATUS = {
+    "":  "出勤",
+    "希": "希望休",
+    "休": "確定休",
+}
+# segmented_control の選択肢 → 書き込む値 への変換マップ
+STATUS_TO_CELL = {
+    "出勤":  "",
+    "希望休": "希",
+    "確定休": "休",
+}
 
 
 def get_gspread_client():
@@ -252,8 +260,8 @@ def get_gspread_client():
 
 @st.cache_data(ttl=60)
 def load_staff_master():
+    """スタッフ一覧シートから {店舗名: [スタッフ名, ...]} の辞書を返す"""
     client = get_gspread_client()
-    # ★【修正②】open_by_key でIDを使って開く
     spreadsheet = client.open_by_key(SPREADSHEET_ID)
     master_sheet = spreadsheet.worksheet("スタッフ一覧")
     data = master_sheet.get_all_records()
@@ -261,12 +269,61 @@ def load_staff_master():
     for row in data:
         store = str(row["店舗名"])
         staff = str(row["スタッフ名"])
-        cleaned_staff = aggressive_clean(staff)
-        if cleaned_staff:
+        if aggressive_clean(staff):
             if store not in staff_dict:
                 staff_dict[store] = []
-            staff_dict[store].append(staff)  # 表示用には元の名前を使う
+            staff_dict[store].append(staff)
     return staff_dict
+
+
+@st.cache_data(ttl=30)
+def load_existing_shift(staff_name: str, sheet_name: str, num_days: int) -> dict:
+    """
+    指定シートから staff_name の行を探し、
+    {1: "出勤", 2: "希望休", ...} の形式で返す。
+    シートが存在しない・スタッフが見つからない場合は全日「出勤」を返す。
+    """
+    default = {day: "出勤" for day in range(1, num_days + 1)}
+    try:
+        client = get_gspread_client()
+        ss = client.open_by_key(SPREADSHEET_ID)
+
+        try:
+            shift_ws = ss.worksheet(sheet_name)
+        except gspread.exceptions.WorksheetNotFound:
+            return default
+
+        a_col_values = shift_ws.col_values(1)
+        clean_target = aggressive_clean(staff_name)
+        target_row = None
+
+        for i, cell_val in enumerate(a_col_values):
+            clean_cell = aggressive_clean(cell_val)
+            if not clean_cell:
+                continue
+            if clean_target == clean_cell or clean_target in clean_cell or clean_cell in clean_target:
+                target_row = i + 1
+                break
+
+        if target_row is None:
+            return default
+
+        # 該当行を一括取得（2列目〜 が各日のデータ）
+        row_values = shift_ws.row_values(target_row)
+        result = {}
+        for day in range(1, num_days + 1):
+            col_index = day + 1          # 2列目〜
+            list_index = col_index - 1   # リストは0始まり
+            if list_index < len(row_values):
+                cell_val = row_values[list_index]
+                result[day] = CELL_TO_STATUS.get(cell_val, "出勤")
+            else:
+                result[day] = "出勤"
+        return result
+
+    except Exception:
+        # 読み込み失敗時もアプリを止めず全日「出勤」で続行
+        return default
 
 
 # --- 3. 画面の作成 ---
@@ -286,10 +343,30 @@ selected_staff = st.selectbox("スタッフ名", staff_data[selected_store])
 st.write("---")
 
 today = datetime.date.today()
-if today.month == 12:
-    year, month = today.year + 1, 1
-else:
-    year, month = today.year, today.month + 1
+
+# 選択肢：当月から3ヶ月先まで、ただし年をまたぐ月は除外
+month_options = []
+for i in range(4):
+    m = today.month + i
+    y = today.year + (m - 1) // 12
+    m = ((m - 1) % 12) + 1
+    if y == today.year:  # 今年の月のみ
+        month_options.append((y, m))
+
+month_labels = [f"{y}年{m}月" for y, m in month_options]
+
+# デフォルトは翌月（翌月が今年内にあれば）、なければ当月
+default_index = 1 if len(month_options) > 1 else 0
+
+st.subheader("📆 提出する月を選択してください")
+selected_label = st.selectbox("対象月", month_labels, index=default_index)
+selected_index = month_labels.index(selected_label)
+year, month = month_options[selected_index]
+
+num_days = calendar.monthrange(year, month)[1]
+
+# 動的シート名（例：「4月シフト」）
+shift_sheet_name = f"{month}月シフト"
 
 st.subheader(f"📅 【{year}年{month}月分】のシフト")
 
@@ -300,10 +377,18 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-st.info("💡 シフトを入力してください。")
+# ★ 既存シフトをスプレッドシートから読み込む
+with st.spinner("前回のシフトを読み込み中..."):
+    existing_shift = load_existing_shift(selected_staff, shift_sheet_name, num_days)
+
+# 既存データがあれば通知メッセージを切り替える
+has_existing = any(v != "出勤" for v in existing_shift.values())
+if has_existing:
+    st.info("💡 前回提出済みのシフトを反映しています。変更したい日だけ修正してください。")
+else:
+    st.info("💡 シフトを入力してください。")
 
 # --- 4. カレンダーデータ作成 ---
-num_days = calendar.monthrange(year, month)[1]
 selections = {}
 date_strings = {}
 
@@ -330,10 +415,11 @@ for day in range(1, num_days + 1):
             unsafe_allow_html=True
         )
     with col2:
+        # ★ default に既存シフトの値をセット
         selections[day] = st.segmented_control(
             f"{day}日の状態",
             options=["出勤", "希望休", "確定休"],
-            default="出勤",
+            default=existing_shift[day],
             key=f"btn_{day}",
             label_visibility="collapsed"
         )
@@ -350,10 +436,9 @@ st.write("---")
 
 # --- 5. 【送信 ＆ 即時転記】 ---
 if st.button("この内容でシフトを確定する", type="primary"):
-    with st.spinner('シフト表を更新中...（約10秒お待ちください）'):
+    with st.spinner("シフト表を更新中...（約10秒お待ちください）"):
         try:
             client = get_gspread_client()
-            # ★【修正③】ここも open_by_key に統一
             ss = client.open_by_key(SPREADSHEET_ID)
 
             # 受信シートへの追記
@@ -361,12 +446,23 @@ if st.button("この内容でシフトを確定する", type="primary"):
             k_list = [date_strings[day] for day, status in selections.items() if status == "希望休"]
             c_list = [date_strings[day] for day, status in selections.items() if status == "確定休"]
             now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            reception_ws.append_row([now, selected_store, selected_staff, f"{year}年{month}月", "、".join(k_list), "、".join(c_list), memo])
+            reception_ws.append_row([
+                now, selected_store, selected_staff,
+                f"{year}年{month}月",
+                "、".join(k_list),
+                "、".join(c_list),
+                memo
+            ])
 
-            # シフトシートへの転記
-            shift_ws = ss.worksheet("シフト")
+            # ★ 動的シート名でシフトシートを開く
+            try:
+                shift_ws = ss.worksheet(shift_sheet_name)
+            except gspread.exceptions.WorksheetNotFound:
+                st.error(f"⚠️ スプレッドシートに『{shift_sheet_name}』シートが見つかりません。シート名を確認してください。")
+                st.stop()
+
+            # 該当スタッフの行を検索
             a_col_values = shift_ws.col_values(1)
-
             target_row = None
             clean_target = aggressive_clean(selected_staff)
             debug_list = []
@@ -375,45 +471,31 @@ if st.button("この内容でシフトを確定する", type="primary"):
                 clean_cell = aggressive_clean(cell_val)
                 if not clean_cell:
                     continue
-
-                # ★【修正④】repr() で不可視文字を可視化してデバッグリストに記録
                 debug_list.append(f"{i+1}行目: {clean_cell}  (生の値: {repr(cell_val)})")
-
                 if clean_target == clean_cell or clean_target in clean_cell or clean_cell in clean_target:
                     target_row = i + 1
                     break
 
             if target_row is None:
-                st.error(f"⚠️ スプレッドシートの『シフト』シートに『{selected_staff}』さんが見つかりませんでした。")
+                st.error(f"⚠️ 『{shift_sheet_name}』シートに『{selected_staff}』さんが見つかりませんでした。")
                 st.info(f"🔍 探している名前（クリーニング後）: {repr(clean_target)}")
-
                 if not debug_list:
-                    st.warning(
-                        "🔍 A列を読み取りましたが、文字が1つも入っていませんでした。\n\n"
-                        "名前が入っているのはB列だったり、A列とB列がセルの結合でくっついていたりしませんか？"
-                    )
+                    st.warning("🔍 A列を読み取りましたが、文字が1つも入っていませんでした。")
                 else:
-                    st.warning("🔍 プログラムが読み取ったA列のデータ（生の値も含む）:\n\n" + "\n".join(debug_list))
-
+                    st.warning("🔍 読み取ったA列のデータ:\n\n" + "\n".join(debug_list))
                 st.stop()
 
-            # 見つかった行に1ヶ月分を書き込む
+            # 1ヶ月分を書き込む
             for day in range(1, num_days + 1):
                 status = selections[day] or "出勤"
                 col = day + 1
-
-                if status == "希望休":
-                    val, bg_color = "", gsf.Color(1, 1, 0)
-                elif status == "確定休":
-                    val, bg_color = "", gsf.Color(1, 0.6, 0.6)
-                else:
-                    val, bg_color = "○", gsf.Color(1, 1, 1)
-
+                val = STATUS_TO_CELL[status]
                 shift_ws.update_cell(target_row, col, val)
-                fmt = gsf.CellFormat(backgroundColor=bg_color)
-                gsf.format_cell_range(shift_ws, gspread.utils.rowcol_to_a1(target_row, col), fmt)
 
-            st.success(f"✅ {selected_staff}さんのシフトを更新しました！")
+            # キャッシュをクリアして次回表示時に最新データを反映
+            load_existing_shift.clear()
+
+            st.success(f"✅ {selected_staff}さんの{month}月シフトを更新しました！")
             st.balloons()
 
         except Exception as e:
