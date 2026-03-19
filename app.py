@@ -5,6 +5,7 @@ import jpholiday
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import gspread_formatting as gsf
+import unicodedata # ★文字正規化のために追加
 
 # --- 1. 【デザイン設定】白背景・視認性重視CSS ---
 st.set_page_config(page_title="シフト申請", layout="centered")
@@ -189,6 +190,16 @@ button[kind="primary"]:hover,
 </style>
 """, unsafe_allow_html=True)
 
+# --- ★【超強化】目に見えない幽霊文字も完全に消し去るクリーニング関数 ---
+def aggressive_clean(text):
+    if not text:
+        return ""
+    # 文字列に変換して、Unicode正規化 (NFKC) で半角・全角を統一
+    text = unicodedata.normalize('NFKC', str(text))
+    # 半角スペース、全角スペース、改行、そして「目に見えない特殊文字（\xa0など）」をすべて削除
+    text = text.replace(" ", "").replace("　", "").replace("\n", "").replace("\r", "").replace("\xa0", "").strip()
+    return text
+
 # --- JS：MutationObserver でインラインスタイルを直接書き込み（ダークモード完全対策） ---
 st.markdown("""
 <script>
@@ -240,9 +251,16 @@ def load_staff_master():
     data = master_sheet.get_all_records()
     staff_dict = {}
     for row in data:
-        store, staff = row["店舗名"], row["スタッフ名"]
-        if store not in staff_dict: staff_dict[store] = []
-        staff_dict[store].append(staff)
+        # 店舗名とスタッフ名を取得
+        store, staff = str(row["店舗名"]), str(row["スタッフ名"])
+        
+        # ★【強化】スタッフ一覧の名簿自体もクリーニングして登録
+        cleaned_staff = aggressive_clean(staff)
+        
+        # クリーニング後の名前をキーにして、元の名前（表示用）を保存
+        if cleaned_staff:
+            if store not in staff_dict: staff_dict[store] = []
+            staff_dict[store].append(staff) # 画面表示用には元の名前をそのまま使う
     return staff_dict
 
 # --- 3. 画面の作成 ---
@@ -339,18 +357,17 @@ if st.button("この内容でシフトを確定する", type="primary"):
 
             shift_ws = ss.worksheet("シフト")
             
-            # ▼▼▼ 原因調査のための「レントゲン」コード ▼▼▼
-            a_col_values = shift_ws.col_values(1) # A列を取得
-            st.warning(f"🔍【調査】プログラムが取得したA列の全データ:\n {a_col_values}")
-            st.warning(f"🔍【調査】探している名前:\n {selected_staff}")
-            # ▲▲▲ ここまで ▲▲▲
-
+            # 【強化】スペースや幽霊文字を完全に無視してA列から名前を探す機能
             try:
+                a_col_values = shift_ws.col_values(1) # A列のデータをすべて取得
                 target_row = None
-                clean_target = str(selected_staff).replace(" ", "").replace("　", "").replace("\n", "").strip()
+                
+                # ★探している名前を「最強クリーニング」
+                clean_target = aggressive_clean(selected_staff)
                 
                 for i, cell_val in enumerate(a_col_values):
-                    clean_cell = str(cell_val).replace(" ", "").replace("　", "").replace("\n", "").strip()
+                    # ★スプレッドシート側のA列の名前も「最強クリーニング」して比較
+                    clean_cell = aggressive_clean(cell_val)
                     if clean_target == clean_cell:
                         target_row = i + 1
                         break
