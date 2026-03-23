@@ -1,10 +1,9 @@
-
 import streamlit as st
 import datetime
 import calendar
 import jpholiday
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials
 import gspread_formatting as gsf
 
 # --- 1. 【デザイン設定】白背景・視認性重視CSS ---
@@ -232,8 +231,8 @@ SHEET_NAME = "MEN売上目標原本"
 
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_FILE, scope)
-    return gspread.authorize(creds)
+    creds = Credentials.from_service_account_file(JSON_FILE, scopes=scope)
+    return gspread.Client(auth=creds)
 
 @st.cache_data(ttl=60)
 def load_staff_master():
@@ -370,3 +369,4 @@ if st.button("この内容でシフトを確定する", type="primary"):
 
         except Exception as e:
             st.error(f"システムエラー: {e}")
+            
