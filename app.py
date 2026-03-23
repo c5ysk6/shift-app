@@ -3,7 +3,6 @@ import datetime
 import calendar
 import jpholiday
 import gspread
-from google.oauth2.service_account import Credentials
 import gspread_formatting as gsf
 
 # --- 1. 【デザイン設定】白背景・視認性重視CSS ---
@@ -230,9 +229,7 @@ JSON_FILE = "mybusinessauto-124455173d43.json"
 SHEET_NAME = "MEN売上目標原本"
 
 def get_gspread_client():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_file(JSON_FILE, scopes=scope)
-    return gspread.Client(auth=creds)
+    return gspread.service_account(filename=JSON_FILE)
 
 @st.cache_data(ttl=60)
 def load_staff_master():
@@ -369,3 +366,4 @@ if st.button("この内容でシフトを確定する", type="primary"):
 
         except Exception as e:
             st.error(f"システムエラー: {e}")
+            
