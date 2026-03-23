@@ -366,4 +366,3 @@ if st.button("この内容でシフトを確定する", type="primary"):
 
         except Exception as e:
             st.error(f"システムエラー: {e}")
-            
